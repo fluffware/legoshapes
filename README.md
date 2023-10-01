@@ -9,4 +9,4 @@ Run as:
 
 This will create the file shape.scad .
 
-When running openscad the file shape_parts needs to be in the search path
+When running openscad the file shape_parts.scad needs to be in the search path

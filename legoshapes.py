@@ -2,6 +2,7 @@ from svgelements import *;
 import sys;
 import bisect
 import math
+import getopt
 
 from types import MethodType
 
@@ -47,17 +48,20 @@ def recursive_split(curve, start, end, max_error):
 
 def cubic_polygon(self):
     polygon = recursive_split(self, 0,1, 1e-2)
-    polygon.append(self.end)
     return polygon
     
 
-CubicBezier.polygon = cubic_polygon;
+CubicBezier.polygon = cubic_polygon
 
 def path_seg_polygon(self):
-    if self.end == None or self.start == None or self.end == self.start:
-        return [];
-    else:
+    if self.start != None and self.end != None:
         return [self.start, self.end]
+    elif self.start != None:
+        return [self.start, self.start]
+    elif self.end != None:
+        return [self.end, self.end]
+    else:
+        return []
     
 PathSegment.polygon = path_seg_polygon
 
@@ -156,6 +160,7 @@ def point_in_poly(segs, point):
 
             if (x1 -point.x) * (y1 - y2) + (x2-x1)*(y1-point.y) > 0:
                 count += 1
+                
     return (count & 1) == 1
 
 def remove_short(poly, min):
@@ -165,18 +170,127 @@ def remove_short(poly, min):
             prev = p
             yield p
 
+shape_no = 0
 
-if len(sys.argv) <= 2:
+def output_shape(out, polys, options):
+    global shape_no
+    shape_no += 1
+    shape_name="shape_"+str(shape_no);
+
+    out.write("module "+shape_name+"() {\n");
+    points = []
+    paths = []
+    segs = []
+    for path_poly in polys:
+
+        path_poly = list(remove_short(path_poly, 1e-6))
+        segs.extend(split_on_direction(path_poly))
+        pos = len(points)
+        points.extend(path_poly)
+        paths.append(list(range(pos, pos + len(path_poly))))
+        
+
+    out.write("polygon(points=["+(",".join("[%f, %f]" % (p.x,p.y) for p in points))
+              + "], paths=["
+              +",".join(("[" + ",".join("%d" % (p) for p in path)+"]") for path in paths)
+              +"]);\n")
+    out.write("}\n"  )
+
+    out.write("translate([0,0,%f]) {\n"%(BRICK_HEIGHT-TOP_THICKNESS))
+    out.write("linear_extrude(height=%f) {\n"%TOP_THICKNESS  )
+    out.write(shape_name+"();\n"  )
+    out.write("}\n"  )
+    out.write("}\n"  )
+
+    out.write("difference() {\n"  )
+    out.write("  linear_extrude(height=%f) {\n"%BRICK_HEIGHT  )
+    out.write("    difference() {\n"  )
+    out.write("      "+shape_name+"();\n"  )
+    out.write("      offset(delta="+str(-WALL_THICKNESS)+") {"+shape_name+"();}\n"  )
+    out.write("    }\n"  )
+    out.write("  }\n"  )
+
+        
+    xmin, ymin, xmax, ymax = poly_bbox(points)
+    xmin = math.floor((xmin-STUD_DIST/2) / STUD_DIST) * STUD_DIST
+    ymin = math.floor((ymin-STUD_DIST/2) / STUD_DIST) * STUD_DIST
+    y = ymin
+    while y < ymax:
+        x = xmin
+        while x < xmax:
+             out.write("translate([%f,%f,0]) {negative_stud();}\n"
+                       %(x+STUD_DIST/2,y+STUD_DIST/2))
+             x += STUD_DIST
+        y += STUD_DIST
+    out.write("}\n"  )
+
+    y = ymin
+    while y < ymax:
+        x = xmin
+        while x < xmax:
+            if options["use_antistuds"] and point_in_poly(segs, Point(x,y)):
+                # Place anitstuds
+                intersected = False
+                for points in polys:
+                    prev_p = points[0]
+                    for p in points[1:]:
+                        if intersect_line_circle(prev_p, p, Point(x,y), ANTISTUD_CLEARANCE) != (None,None):
+                            intersected = True
+                            break
+                        prev_p = p
+                        
+                if not intersected:
+                    out.write("translate([%f,%f]) {antistud(%f);}\n"%(x,y, BRICK_HEIGHT))
+
+            if options["use_studs"] and point_in_poly(segs, Point(x+STUD_DIST/2,y+STUD_DIST/2)):
+                # Place studs
+                intersected = False
+                for points in polys:
+                    prev_p = points[0]
+                    for p in points[1:]:
+                        if intersect_line_circle(prev_p, p, Point(x + STUD_DIST/2,y + STUD_DIST/2), STUD_CLEARANCE) != (None,None):
+                            intersected = True
+                            break
+                        prev_p = p
+                        
+                if not intersected:
+                    out.write("translate([%f,%f,%f]) {stud();}\n"%(x+STUD_DIST/2,y+STUD_DIST/2, BRICK_HEIGHT))
+
+            x += STUD_DIST
+        y += STUD_DIST
+
+opts,args = getopt.gnu_getopt(sys.argv[1:], "o:sa") 
+
+out_file=None
+shape_opts = {"use_studs": True, "use_antistuds": True}
+print(opts)
+for o,a in opts:
+    if o == '-s':
+        shape_opts["use_studs"] = False
+    elif o == '-s':
+        shape_opts["use_studs"] = False
+    elif o == "-o":
+        out_file = a
+        
+
+if out_file == None:
     out = sys.stdout
 else:
-    out = open(sys.argv[2], "w")
+    out = open(out_file, "w")
 
+        
 WALL_THICKNESS=1.2
 TOP_THICKNESS=1
 STUD_DIST=8
-ANTISTUD_CLEARANCE=3.5+WALL_THICKNESS
+ANTISTUD_CLEARANCE=6.51/2+WALL_THICKNESS
+STUD_CLEARANCE = 5/2
 BRICK_HEIGHT=3.2
-elems = SVG.parse(sys.argv[1]).elements();
+
+print(args[0])
+elems = SVG.parse(args[0]).elements();
+
+out.write("include <shape_parts.scad>\n"  )
+
 for elem in elems:
     path = None
     if isinstance(elem, Path):
@@ -185,64 +299,24 @@ for elem in elems:
     elif isinstance(elem, Shape):
         path = Path(elem)
         path.reify()  # In some cases the shape could not have reified, the path must.
-
+    
     if path != None:
         print(path)
+        path_polys = []
         path_poly = []
         for seg in path.segments():
+            if isinstance(seg, Move):
+                path_poly = []
+                continue
             poly = seg.polygon()
             path_poly.extend(poly);
+            if isinstance(seg, Close):
+                path_polys.append(path_poly)
+                path_poly = []
 
-        path_poly = list(remove_short(path_poly, 1e-6))
-        if len(path_poly) >= 2:
-            offseted = poly_offset(path_poly,5)                
-        segs = split_on_direction(path_poly)
-        out.write("include <shape_parts.scad>\n"  )
-        out.write("module shape() {\n");
-        out.write("polygon(points=["+",".join("[%f, %f]" % (p.x,p.y) for p in path_poly)+ "]);\n"  )
-        out.write("}\n"  )
-        
-        out.write("translate([0,0,%f]) {\n"%(BRICK_HEIGHT-TOP_THICKNESS))
-        out.write("linear_extrude(height=%f) {\n"%TOP_THICKNESS  )
-        out.write("shape();\n"  )
-        out.write("}\n"  )
-        out.write("}\n"  )
-        
-        out.write("difference() {\n"  )
-        out.write("linear_extrude(height=%f) {\n"%BRICK_HEIGHT  )
-        out.write("difference() {\n"  )
-        out.write("shape();\n"  )
-        out.write("offset(delta="+str(-WALL_THICKNESS)+") {shape();}\n"  )
-        out.write("}\n"  )
-        out.write("}\n"  )
-        
-        xmin, ymin, xmax, ymax = poly_bbox(path_poly)
-        xmin = math.floor((xmin-STUD_DIST/2) / STUD_DIST) * STUD_DIST
-        ymin = math.floor((ymin-STUD_DIST/2) / STUD_DIST) * STUD_DIST
-        y = ymin
-        while y < ymax:
-            x = xmin
-            while x < xmax:
-                 out.write("translate([%f,%f,0]) {negative_stud();}\n"
-                           %(x+STUD_DIST/2,y+STUD_DIST/2))
-                 x += STUD_DIST
-            y += STUD_DIST
-        out.write("}\n"  )
 
-        y = ymin
-        while y < ymax:
-            x = xmin
-            while x < xmax:
-                if point_in_poly(segs, Point(x,y)):
-                    prev_p = path_poly[0]
-                    intersected = False
-                    for p in path_poly[1:]:
-                        if intersect_line_circle(prev_p, p, Point(x,y), ANTISTUD_CLEARANCE) != (None,None):
-                            intersected = True
-                            break
-                        prev_p = p
-                    if not intersected:
-                         out.write("translate([%f,%f]) {antistud(%f);}\n"%(x,y, BRICK_HEIGHT))
-                x += STUD_DIST
-            y += STUD_DIST
-        
+        path_poly.append(path_poly[0])
+        path_polys.append(path_poly)
+              
+        if len(path_polys) >= 1:
+            output_shape(out, path_polys, shape_opts)

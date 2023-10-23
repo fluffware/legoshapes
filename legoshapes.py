@@ -53,6 +53,15 @@ def cubic_polygon(self):
 
 CubicBezier.polygon = cubic_polygon
 
+def quadratic_polygon(self):
+    cubic = CubicBezier(self.start,
+                        self.start + (self.control - self.start) * (2 / 3),
+                        self.end + (self.control - self.end) * (2 / 3), self.end)
+    return cubic.polygon()
+    
+
+QuadraticBezier.polygon = quadratic_polygon
+
 def path_seg_polygon(self):
     if self.start != None and self.end != None:
         return [self.start, self.end]
@@ -62,8 +71,18 @@ def path_seg_polygon(self):
         return [self.end, self.end]
     else:
         return []
-    
+
+
 PathSegment.polygon = path_seg_polygon
+
+
+def arc_polygon(self):
+    polygon = []
+    for curve in self.as_cubic_curves():
+        polygon.extend(curve.polygon())
+    return polygon
+
+Arc.polygon = arc_polygon
 
 def intersect_line_circle(line1, line2, center, radius):
     a0 = line1.x - center.x
@@ -287,7 +306,7 @@ STUD_CLEARANCE = 5/2
 BRICK_HEIGHT=3.2
 
 print(args[0])
-elems = SVG.parse(args[0]).elements();
+elems = SVG.parse(args[0],transform="scale(1,-1)").elements();
 
 out.write("include <shape_parts.scad>\n"  )
 
@@ -314,9 +333,9 @@ for elem in elems:
                 path_polys.append(path_poly)
                 path_poly = []
 
-
-        path_poly.append(path_poly[0])
-        path_polys.append(path_poly)
+        if len(path_poly) > 0:
+            path_poly.append(path_poly[0])
+            path_polys.append(path_poly)
               
         if len(path_polys) >= 1:
             output_shape(out, path_polys, shape_opts)
